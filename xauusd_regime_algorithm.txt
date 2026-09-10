@@ -1,0 +1,415 @@
+================================================================================
+  ADAPTIVE MARKET REGIME ALGORITHM FOR XAU/USD (GOLD)
+  Based on academic research + proven practitioner approaches
+================================================================================
+
+TABLE OF CONTENTS
+-----------------
+1. How Regime Detection Works
+2. The 4 Regimes for XAU/USD
+3. Detection Algorithm (Step by Step)
+4. Adaptive Strategy Rules Per Regime
+5. Risk Management Overlay
+6. Implementation (Pseudocode)
+7. XAU/USD-Specific Tuning
+8. Sources & References
+
+
+================================================================================
+1. HOW REGIME DETECTION WORKS
+================================================================================
+
+Every regime detection system answers two questions:
+  a) Is the market trending or ranging?    → Use ADX + Autocorrelation
+  b) Is volatility normal or elevated?     → Use ATR Ratio
+
+The combination of these two dimensions creates the 4 regimes.
+
+The best-performing systems use a HIERARCHICAL decision tree, not a single
+indicator. Decision order matters:
+
+  Step 1: Check volatility FIRST (volatile overrides everything)
+  Step 2: Check trend strength SECOND
+  Step 3: Classify direction THIRD
+
+This is because a highly volatile market is dangerous regardless of trend.
+
+
+================================================================================
+2. THE 4 REGIMES FOR XAU/USD
+================================================================================
+
++------------------+-----------+------------+----------------------------------+
+| Regime           | ADX       | ATR Ratio  | What Gold Does                   |
++------------------+-----------+------------+----------------------------------+
+| TRENDING UP      | ADX > 25  | 0.8 - 1.2  | Steady climb, shallow pullbacks  |
+| TRENDING DOWN    | ADX > 25  | 0.8 - 1.2  | Steady decline, weak bounces     |
+| RANGING          | ADX < 20  | 0.8 - 1.2  | Choppy, bounces off S/R levels   |
+| HIGH VOLATILE    | ANY       | > 1.5      | Spikes, whipsaws, news-driven    |
++------------------+-----------+------------+----------------------------------+
+
+Definitions:
+  ADX = Average Directional Index (14-period) — measures TREND STRENGTH only
+  ATR Ratio = Short ATR(14) / Long ATR(50) — measures volatility expansion
+
+XAU/USD nuances:
+  - Gold trends HARDER than most forex pairs (ADX regularly hits 40-60)
+  - Gold consolidations are BRUTAL for trend followers (false breakouts)
+  - NFP, CPI, FOMC create massive volatility spikes (ATR ratio > 2.0)
+  - Gold correlates inversely with USD and with real yields
+
+
+================================================================================
+3. DETECTION ALGORITHM (Step by Step)
+================================================================================
+
+--- STEP 1: CALCULATE RAW METRICS ---
+
+  inputs:
+    close[]       = closing prices
+    high[]        = highs
+    low[]         = lows
+    lookback      = 14        (for ADX and short ATR)
+    long_lookback = 50        (for long ATR)
+    lookback_stat = 100       (for autocorrelation)
+    vol_threshold = 1.5       (ATR ratio threshold)
+    trend_threshold = 25      (ADX threshold)
+
+  a) ATR(14)   = Average True Range over 14 bars
+  b) ATR(50)   = Average True Range over 50 bars
+  c) ATR Ratio = ATR(14) / ATR(50)
+  d) ADX(14)   = Average Directional Index over 14 bars
+  e) Slope     = linear regression slope of closes over lookback_stat bars
+  f) AutoCorr  = autocorrelation of returns at lag 1 over lookback_stat bars
+
+--- STEP 2: CLASSIFY REGIME (Hierarchical) ---
+
+  if ATR Ratio > vol_threshold:
+      regime = HIGH_VOLATILE
+
+  else if ADX > trend_threshold:
+      if slope > 0:
+          regime = TRENDING_UP
+      else:
+          regime = TRENDING_DOWN
+
+  else:
+      regime = RANGING
+
+--- STEP 3: CONFIRM WITH AUTOCORRELATION (Optional Filter) ---
+
+  autocorrelation adds a statistical confirmation layer:
+    - Positive autocorrelation (> 0.1)  → confirms trending
+    - Negative autocorrelation (< -0.1) → confirms ranging
+    - Near zero (between -0.1 and 0.1) → ambiguous, trust ADX
+
+  This prevents false regime labels during transition periods.
+
+--- STEP 4: SMOOTH TO PREVENT WHIPSAW ---
+
+  Problem: Regime flips every bar cause churning.
+  Solution: Require N consecutive bars (default 3) in new regime before switching.
+
+  regime_buffer[0..2] = circular buffer of last 3 regime labels
+  if all 3 entries == NEW_REGIME:
+      confirmed_regime = NEW_REGIME
+  else:
+      confirmed_regime = previous_confirmed_regime
+
+
+================================================================================
+4. ADAPTIVE STRATEGY RULES PER REGIME
+================================================================================
+
+--- REGIME: TRENDING UP 🚀 ---
+  Entry:     Buy on pullback to EMA(21) or EMA(50)
+  Filter:    Price must be above EMA(200) on daily
+  Stop Loss: 1.5x ATR(14) below entry
+  Take Profit: 3x ATR(14) above entry (R:R = 1:2)
+  Trailing:  Yes — trail stop at 1x ATR behind price
+  Position:  Full size (1-2% risk)
+  Exit:      Trailing stop hit, or regime changes away from trending up
+
+--- REGIME: TRENDING DOWN 📉 ---
+  Entry:     Sell on bounce to EMA(21) or EMA(50)
+  Filter:    Price must be below EMA(200) on daily
+  Stop Loss: 1.5x ATR(14) above entry
+  Take Profit: 3x ATR(14) below entry (R:R = 1:2)
+  Trailing:  Yes — trail stop at 1x ATR above price
+  Position:  Full size (1-2% risk)
+  Exit:      Trailing stop hit, or regime changes away from trending down
+
+--- REGIME: RANGING 🦀 ---
+  Entry:     Buy at support / sell at resistance
+  Filter:    RSI(14) < 35 for buys, RSI(14) > 65 for sells
+  Stop Loss: Just beyond the range boundary (0.5-1x ATR)
+  Take Profit: Opposite side of range (0.6x normal TP multiplier)
+  Trailing:  NO — take quick profit at fixed target
+  Position:  Reduced size (0.5-1% risk)
+  Exit:      TP hit, or regime changes (warning: breakout incoming)
+
+  IMPORTANT: In ranging regime, DISABLE trailing stops.
+  Gold ranges are tight and trailing stops get hit by wicks.
+
+--- REGIME: HIGH VOLATILE ⚠️ ---
+  Entry:     REDUCE ACTIVITY — only trade A+ setups
+  Filter:    Must have confluence of 3+ indicators
+  Stop Loss: 2.5x ATR(14) (wider to survive spikes)
+  Take Profit: 2x ATR(14) only (reduce targets, take what you can)
+  Trailing:  NO — fixed TP only
+  Position:  HALF size (0.5% risk max)
+  Exit:      TP or SL only, no discretion
+
+  CRITICAL: During volatile regime, many traders sit out entirely.
+  The priority is SURVIVAL, not profit.
+
+
+================================================================================
+5. RISK MANAGEMENT OVERLAY (Always Active)
+================================================================================
+
+These rules apply in ALL regimes:
+
+  a) Max risk per trade:        1-2% of account
+  b) Max daily loss:            3-5% of account (stop trading for the day)
+  c) Max concurrent trades:     2-3 positions max
+  d) Correlation check:         Don't hold multiple gold trades in same direction
+  e) Position sizing formula:
+       Position Size = (Account Balance × Risk %) / (Stop Loss in pips × pip value)
+
+  f) Regime-based sizing adjustment:
+       TRENDING:   1.0x normal size
+       RANGING:    0.6x normal size
+       VOLATILE:   0.4x normal size
+
+  g) After 2 consecutive losses: Reduce size by 50% for next 3 trades
+  h) After 5 consecutive losses: Stop trading, review regime detection accuracy
+
+
+================================================================================
+6. IMPLEMENTATION (Python Pseudocode)
+================================================================================
+
+```python
+import numpy as np
+
+# --- CONFIGURATION ---
+ADX_PERIOD = 14
+ATR_SHORT_PERIOD = 14
+ATR_LONG_PERIOD = 50
+LOOKBACK_STAT = 100
+VOL_THRESHOLD = 1.5
+TREND_THRESHOLD = 25
+CONFIRM_BARS = 3
+
+# --- INDICATORS ---
+def calc_atr(high, low, close, period):
+    """Average True Range"""
+    tr = np.maximum(high - low,
+         np.maximum(abs(high - np.roll(close, 1)),
+                    abs(low - np.roll(close, 1))))
+    return np.convolve(tr, np.ones(period)/period, mode='valid')
+
+def calc_adx(high, low, close, period):
+    """Average Directional Index (simplified)"""
+    plus_dm = np.maximum(np.diff(high), 0)
+    minus_dm = np.maximum(-np.diff(low), 0)
+    # Mask: only keep the larger of the two
+    mask = plus_dm > minus_dm
+    plus_dm[~mask] = 0
+    minus_dm[mask] = 0
+    atr = calc_atr(high, low, close, period)
+    plus_di = 100 * np.convolve(plus_dm, np.ones(period)/period, mode='valid') / atr
+    minus_di = 100 * np.convolve(minus_dm, np.ones(period)/period, mode='valid') / atr
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
+    adx = np.convolve(dx, np.ones(period)/period, mode='valid')
+    return adx
+
+def calc_slope(close, lookback):
+    """Linear regression slope of closes"""
+    x = np.arange(lookback)
+    slope = np.polyfit(x, close[-lookback:], 1)[0]
+    return slope
+
+def calc_autocorrelation(returns, lag=1):
+    """Autocorrelation of returns at given lag"""
+    if len(returns) < lag + 2:
+        return 0
+    x = returns[:-lag]
+    y = returns[lag:]
+    if np.std(x) == 0 or np.std(y) == 0:
+        return 0
+    return np.corrcoef(x, y)[0, 1]
+
+# --- REGIME DETECTOR ---
+class RegimeDetector:
+    def __init__(self):
+        self.regime_buffer = []
+        self.confirmed_regime = "RANGING"  # default
+
+    def detect(self, closes, highs, lows):
+        """Returns confirmed regime string"""
+        # Step 1: Calculate metrics
+        atr_short = calc_atr(highs, lows, closes, ATR_SHORT_PERIOD)[-1]
+        atr_long = calc_atr(highs, lows, closes, ATR_LONG_PERIOD)[-1]
+        atr_ratio = atr_short / atr_long if atr_long > 0 else 1.0
+        adx = calc_adx(highs, lows, closes, ADX_PERIOD)[-1]
+        slope = calc_slope(closes, LOOKBACK_STAT)
+        returns = np.diff(np.log(closes[-LOOKBACK_STAT:]))
+        autocorr = calc_autocorrelation(returns)
+
+        # Step 2: Classify (hierarchical — volatile first)
+        if atr_ratio > VOL_THRESHOLD:
+            raw_regime = "HIGH_VOLATILE"
+        elif adx > TREND_THRESHOLD:
+            raw_regime = "TRENDING_UP" if slope > 0 else "TRENDING_DOWN"
+        else:
+            raw_regime = "RANGING"
+
+        # Step 3: Confirm with autocorrelation (soft filter)
+        if raw_regime == "TRENDING_UP" and autocorr < -0.1:
+            raw_regime = "RANGING"  # autocorrelation contradicts
+        elif raw_regime == "TRENDING_DOWN" and autocorr < -0.1:
+            raw_regime = "RANGING"
+        elif raw_regime == "RANGING" and autocorr > 0.2:
+            raw_regime = "TRENDING_UP" if slope > 0 else "TRENDING_DOWN"
+
+        # Step 4: Smooth — require CONFIRM_BARS consecutive
+        self.regime_buffer.append(raw_regime)
+        if len(self.regime_buffer) > CONFIRM_BARS:
+            self.regime_buffer.pop(0)
+
+        if len(self.regime_buffer) == CONFIRM_BARS:
+            if len(set(self.regime_buffer)) == 1:
+                self.confirmed_regime = self.regime_buffer[0]
+
+        return self.confirmed_regime, {
+            "adx": round(adx, 1),
+            "atr_ratio": round(atr_ratio, 2),
+            "slope": round(slope, 6),
+            "autocorr": round(autocorr, 3),
+        }
+
+# --- STRATEGY ENGINE ---
+def get_strategy(regime, account_balance, risk_pct=0.01):
+    """Returns strategy parameters for the current regime"""
+    strategies = {
+        "TRENDING_UP": {
+            "direction": "BUY_ONLY",
+            "entry": "pullback_to_ema21",
+            "sl_atr_mult": 1.5,
+            "tp_atr_mult": 3.0,
+            "trailing": True,
+            "size_multiplier": 1.0,
+            "risk_pct": risk_pct,
+        },
+        "TRENDING_DOWN": {
+            "direction": "SELL_ONLY",
+            "entry": "bounce_to_ema21",
+            "sl_atr_mult": 1.5,
+            "tp_atr_mult": 3.0,
+            "trailing": True,
+            "size_multiplier": 1.0,
+            "risk_pct": risk_pct,
+        },
+        "RANGING": {
+            "direction": "BOTH",
+            "entry": "buy_support_sell_resistance",
+            "sl_atr_mult": 0.8,
+            "tp_atr_mult": 1.5,   # reduced targets
+            "trailing": False,
+            "size_multiplier": 0.6,
+            "risk_pct": risk_pct * 0.6,
+        },
+        "HIGH_VOLATILE": {
+            "direction": "A_PLUS_ONLY",
+            "entry": "triple_confluence",
+            "sl_atr_mult": 2.5,   # wider stops
+            "tp_atr_mult": 2.0,   # reduced targets
+            "trailing": False,
+            "size_multiplier": 0.4,
+            "risk_pct": risk_pct * 0.4,
+        },
+    }
+    return strategies.get(regime, strategies["RANGING"])
+```
+
+
+================================================================================
+7. XAU/USD-SPECIFIC TUNING
+================================================================================
+
+Gold has unique behaviors that require adjusting the defaults:
+
+  a) TIMEFRAME: Use H1 or H4 for regime detection (M15 is too noisy for ADX)
+     - H1: faster regime changes, more signals, more whipsaws
+     - H4: smoother regime detection, fewer false signals
+     - D1: too slow — gold regime shifts happen over days, not weeks
+
+  b) ADX THRESHOLD: Gold trends harder than EUR/USD
+     - Default ADX threshold: 25
+     - For gold, consider raising to 28-30 to avoid false trend signals
+     - Gold ADX regularly reaches 50-70 during strong moves
+
+  c) ATR RATIO THRESHOLD: Gold volatility is inherently higher
+     - Default vol threshold: 1.5
+     - For gold, consider 1.6-1.7 (gold's baseline ATR is wider)
+
+  d) SEASONAL PATTERNS: Gold has known seasonal tendencies
+     - Strong: Jan-Feb (January effect), Aug-Sep (jewelry demand)
+     - Weak: Jun-Jul (summer doldrums)
+     - Regime detection can be weighted by seasonal tendency
+
+  e) NEWS EVENTS: Force HIGH_VOLATILE regime during:
+     - NFP (first Friday of month)
+     - CPI data releases
+     - FOMC decisions
+     - Geopolitical crises
+     - Don't wait for ATR to spike — pre-empt with a calendar overlay
+
+  f) CORRELATION FILTER:
+     - Check DXY (Dollar Index) — strong inverse correlation
+     - Check US 10Y yield — gold falls when yields rise
+     - If DXY is trending strongly, gold regime is likely opposite
+
+
+================================================================================
+8. SOURCES & REFERENCES
+================================================================================
+
+Academic:
+  - Hsu et al. (2016): "How profitable are FX technical trading rules?"
+    ScienceDirect — 113,148 rules tested, up to 30% annual returns in-sample
+  - Ben-David, Birru, Prokopenya (2016): "Uninformative Feedback and Risk
+    Taking: Evidence from Retail Forex Trading" — NBER Working Paper 22146
+  - Levich & Thomas (1993): Bootstrap methodology for FX trading rule profits
+  - Breedon & Ranaldo (2012): "Intraday patterns in FX returns and order flow"
+    — SNB Working Paper — profitable time-of-day strategies for EUR/USD
+  - Ang & Bekaert (2002): Regime switching in exchange rates
+
+Practitioner:
+  - MQL5 Article 17737: "Building a Custom Market Regime Detection System"
+    — CStatistics class, autocorrelation + volatility hierarchical classifier
+  - XAU Sentinel MRE: ADX + ATR Ratio 3-regime engine for gold specifically
+    — Proven approach: ADX > 25 = trend, ATR ratio > 1.5 = volatile
+  - TradingView "Market Regime Detector [Trend + Volatility]"
+    — 4-regime classification using same core metrics
+
+Open Source:
+  - github.com/Sakeeb91/market-regime-detection
+    — HMM + GMM regime detection with walk-forward validation
+  - Hidden Markov Models (hmmlearn) — most academically validated approach
+    — Detects bull, bear, crisis regimes from return + volatility features
+
+Key Insight from Research:
+  "TTRs generate profits for periods of between one and three months but not
+  over the full sample... TTRs are sometimes profitable having taken into
+  account both data snooping bias and transaction costs." — Hsu et al. 2016
+
+  Translation: No single strategy works forever. The regime detector
+  doesn't give you a magic edge — it tells you WHICH strategy to use
+  and WHEN to sit out. The edge is in adaptability, not prediction.
+
+================================================================================
+  END OF DOCUMENT
+================================================================================

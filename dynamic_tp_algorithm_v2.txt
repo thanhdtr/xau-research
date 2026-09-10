@@ -1,0 +1,700 @@
+================================================================================
+  DYNAMIC TAKE PROFIT ALGORITHM FOR XAU/USD (NO ATR)
+  8 independent layers — works in any market regime
+================================================================================
+
+TABLE OF CONTENTS
+  1. Why Not ATR?
+  2. The 8-Layer Architecture
+  3. Layer 1: Volume Profile (Where Traders Actually Traded)
+  4. Layer 2: Fair Value Gaps (Price Imbalances)
+  5. Layer 3: Order Flow / Liquidity Heatmap (Where Stops Cluster)
+  6. Layer 4: Market Structure Breaks (BOS / CHoCH)
+  7. Layer 5: Standard Deviation Envelope (Statistical Targets)
+  8. Layer 6: Momentum Exhaustion Detection
+  9. Layer 7: Fibonacci / Harmonic Price Extensions
+  10. Layer 8: Neural Exit Learner (ML-Based Adaptive Exit)
+  11. The Master Algorithm — How All 8 Layers Combine
+  12. Regime Weighting Table
+  13. XAU/USD Specific Tuning
+  14. Pseudocode
+  15. Sources
+================================================================================
+
+
+1. WHY NOT ATR?
+================================================================================
+
+ATR measures "how far has price moved recently" — it's a lagging,
+backward-looking measure of volatility. It has critical weaknesses:
+
+- ATR tells you NOTHING about WHERE price will stop — only how
+  far it MIGHT move
+- In a trending market, ATR expands and gives overly wide targets
+  that price never reaches
+- In a ranging market, ATR gives targets based on the last spike,
+  which won't repeat
+- ATR doesn't know about liquidity, order flow, or where
+  institutional orders sit
+
+The 8 layers below answer the question ATR can't:
+"Where will price actually GO, and why?"
+
+
+2. THE 8-LAYER ARCHITECTURE
+================================================================================
+
+Each layer asks a different question about WHERE price is headed:
+
+  Layer 1 — Volume Profile    → "Where is fair value?"
+  Layer 2 — Fair Value Gaps   → "Where does price owe a return?"
+  Layer 3 — Liquidity Heatmap → "Where will price sweep stops?"
+  Layer 4 — Market Structure  → "Where will the trend break/pause?"
+  Layer 5 — Std Dev Envelope  → "Where is statistically extreme?"
+  Layer 6 — Momentum Exhaustion → "Is this move running out of gas?"
+  Layer 7 — Fibonacci/ harmonic → "Where are the mathematical ratios?"
+  Layer 8 — Neural Exit Learner → "What does the pattern say?"
+
+The final TP is the CONFLUENCE ZONE — where multiple layers agree.
+More layers agreeing = higher confidence target.
+
+
+3. LAYER 1: VOLUME PROFILE (WHERE TRADERS ACTUALLY TRADED)
+================================================================================
+
+Volume Profile maps HOW MUCH volume traded at EACH price level.
+This reveals where the market considers "fair value" and where
+it doesn't.
+
+Key Levels:
+  POC (Point of Control)    — Price with MOST volume = fair value
+  VAH (Value Area High)     — Top of the 70% volume range
+  VAL (Value Area Low)      — Bottom of the 70% volume range
+  HVN (High Volume Node)    — Clusters where price STALLS/MAGNETS
+  LVN (Low Volume Node)     — Gaps where price SPEEDS THROUGH
+
+TP Rules:
+  - If price is moving AWAY from POC:
+    TP = next HVN (price decelerates there)
+  - If price is between VAL and VAH:
+    TP = POC (mean reversion magnet)
+  - If price is outside the Value Area:
+    TP = nearest VAL or VAH (rejection zone)
+  - If there's an LVN between entry and target:
+    EXPECT a fast move — widen TP to the next HVN
+
+Why it works for any regime:
+  - Ranging: POC acts as a magnet → TP at POC from VAL/VAH
+  - Trending: LVNs accelerate moves → TP at the next HVN
+  - Volatile: HVNs are where price pauses → natural targets
+
+XAU/USD note: Build VP over 20-day lookback for intraday,
+  or 5-day for scalping. Gold respects HVNs very well.
+
+Computation (Python-style):
+  def build_volume_profile(bars, num_bins=50):
+      price_range = linspace(min(low), max(high), num_bins)
+      profile = {}
+      for bar in bars:
+          for level in price_range:
+              if bar.low <= level <= bar.high:
+                  # distribute volume proportionally
+                  profile[level] += bar.volume / num_bins
+      poc = max(profile, key=profile.get)
+      total_vol = sum(profile.values())
+      sorted_levels = sorted(profile.items(), key=lambda x: -x[1])
+      cumulative = 0
+      value_area = []
+      for level, vol in sorted_levels:
+          cumulative += vol
+          value_area.append(level)
+          if cumulative >= 0.70 * total_vol:
+              break
+      vah = max(value_area)
+      val = min(value_area)
+      return poc, vah, val, profile
+
+
+4. LAYER 2: FAIR VALUE GAPS (PRICE IMBALANCES)
+================================================================================
+
+A Fair Value Gap (FVG) is a 3-candle pattern where the middle
+candle's range doesn't overlap with candle 1 and candle 3. Price
+"skipped" levels — leaving an imbalance.
+
+  Bullish FVG:  Candle 3's LOW > Candle 1's HIGH
+    → Price left a gap BELOW — it will come back to fill it
+    → But FIRST, price may continue UP to a target
+
+  Bearish FVG:  Candle 3's HIGH < Candle 1's LOW
+    → Price left a gap ABOVE — it will come back to fill it
+
+TP Rules:
+  - From an FVG entry, TP at the OPPOSITE side of the gap
+    (gap fill = natural magnet)
+  - If a larger FVG exists beyond the current one:
+    TP = the far edge of the larger FVG
+  - UNFILLED FVGs are price magnets — they attract price
+  - Filled FVGs flip roles (support ↔ resistance)
+
+Why it works for any regime:
+  - Markets are always creating and filling FVGs
+  - In trending markets: FVGs form in the trend direction, price
+    fills them on pullbacks before continuing
+  - In ranging markets: FVGs at range boundaries define targets
+  - In volatile markets: large FVGs = big imbalances = strong magnets
+
+Key insight from research: "Price statistically spends less time
+in LVNs and tends to move to the nearest HVN — FVGs ARE LVNs
+in price action form." (Quantum Algo, 2026)
+
+Algorithm:
+  def find_nearest_fvg(bars, direction):
+      for i in range(2, len(bars)):
+          if direction == "BUY":
+              if bars[i].low > bars[i-2].high:  # bullish FVG
+                  gap_low = bars[i-2].high
+                  gap_high = bars[i].low
+                  mid = (gap_low + gap_high) / 2
+                  return {"low": gap_low, "high": gap_high, "target": mid}
+          elif direction == "SELL":
+              if bars[i].high < bars[i-2].low:  # bearish FVG
+                  gap_low = bars[i].high
+                  gap_high = bars[i-2].low
+                  mid = (gap_low + gap_high) / 2
+                  return {"low": gap_low, "high": gap_high, "target": mid}
+      return None
+
+
+5. LAYER 3: ORDER FLOW / LIQUIDITY HEATMAP
+================================================================================
+
+Markets move FROM one liquidity pool TO another. Liquidity exists
+where traders place stop losses — which is exactly where
+market makers push price to trigger those stops.
+
+Where stops cluster:
+  - Below recent swing lows (sell stops for longs)
+  - Above recent swing highs (buy stops for shorts)
+  - Below/above round numbers (e.g., 2650.00)
+  - Below/above previous day/week high/low
+  - Below/above Asian session range extremes
+
+VPIN (Volume-Synchronized Probability of Informed Trading):
+  Measures the "toxicity" of order flow.
+  VPIN = mean|buy_volume - sell_volume| / total_volume over window
+
+  High VPIN (> 0.7) = informed traders are active
+    → Expect strong directional move
+    → TP = the liquidity pool they're targeting
+  Low VPIN (< 0.3) = noise trading
+    → Range-bound → TP at opposite range boundary
+
+Order Flow Imbalance:
+  Buy proxy  = (Close - Low) / (High - Low) × Volume
+  Sell proxy = (High - Close) / (High - Low) × Volume
+  Imbalance  = (Buy - Sell) / (Buy + Sell)  → range [-1, +1]
+
+  Imbalance > +0.3 = buyers dominant → TP = next resistance
+  Imbalance < -0.3 = sellers dominant → TP = next support
+
+TP Rules:
+  - Calculate liquidity zones (stop clusters) above and below price
+  - If BUY: TP = nearest liquidity zone ABOVE (where shorts' stops sit)
+  - If SELL: TP = nearest liquidity zone BELOW (where longs' stops sit)
+  - Weight by VPIN: high VPIN → extend TP to SECOND liquidity zone
+
+Why it works for any regime:
+  - Liquidity exists in ALL regimes — ranges, trends, volatile
+  - Market makers hunt stops regardless of regime
+  - This is WHERE institutional orders want to fill
+
+
+6. LAYER 4: MARKET STRUCTURE BREAKS (BOS / CHoCH)
+================================================================================
+
+Market structure is the sequence of swing highs and swing lows.
+
+  Higher Highs + Higher Lows = Bullish Structure (uptrend)
+  Lower Highs + Lower Lows  = Bearish Structure (downtrend)
+  Equal Highs/Lows           = Accumulation/Distribution (range)
+
+  BOS (Break of Structure)   = Trend continuation signal
+  CHoCH (Change of Character) = Potential reversal signal
+
+TP Rules:
+  - In a BULLISH BOS: TP = next projected higher high
+    (measured by the distance of the previous swing)
+  - In a BEARISH BOS: TP = next projected lower low
+  - At a CHoCH: Tight TP — the move may be ending
+  - Use the PREVIOUS SWING as a measured move target
+
+Measured Move Projection:
+  If swing A (low) to swing B (high) = 50 pips
+  And swing C (higher low) = 10 pips above B
+  Then projected target = C + 50 = next higher high
+
+Why it works for any regime:
+  - Structure is regime-neutral — every regime has structure
+  - In ranges: structure defines the range boundaries
+  - In trends: structure defines continuation targets
+  - In volatility: structure adapts to wider swings
+
+
+7. LAYER 5: STANDARD DEVIATION ENVELOPE (STATISTICAL TARGETS)
+================================================================================
+
+Price follows a distribution. Standard deviation tells you where
+price is statistically "extreme."
+
+  σ = StdDev(close, period=20)
+  Upper band = SMA(close, 20) + 2 × σ
+  Lower band = SMA(close, 20) - 2 × σ
+
+TP Rules:
+  - If price is near the mean (SMA): TP = ±1σ (normal move)
+  - If price has broken 1σ: TP = 2σ (extended but reachable)
+  - If price has broken 2σ: TP = 3σ (extreme, only in strong trends)
+  - If price is between bands: TP = nearest band edge
+
+Bollinger Band variant:
+  - Upper BB = SMA + 2 × StdDev
+  - Lower BB = SMA - 2 × StdDev
+  - %B = (Price - Lower) / (Upper - Lower) → range [0, 1]
+  - %B < 0.2: oversold → TP = SMA (mean reversion)
+  - %B > 0.8: overbought → TP = SMA
+  - %B between 0.4-0.6: trending → TP = next band edge
+
+Why it works for any regime:
+  - Statistically grounded — works on the math, not the mood
+  - In ranges: price stays within 1σ → TP at band edge
+  - In trends: price rides 1σ → TP at 2σ
+  - In volatile: bands widen → targets widen automatically
+
+
+8. LAYER 6: MOMENTUM EXHAUSTION DETECTION
+================================================================================
+
+Momentum tells you if a move has STRENGTH. When momentum
+exhausts, the move is done — take profit before reversal.
+
+Indicators:
+  RSI (14): Momentum oscillator [0-100]
+  MFI (14): Money Flow Index — volume-weighted RSI
+  Stochastic RSI: Smoothed RSI for sensitivity
+  ROC (10): Rate of Change — momentum acceleration
+
+TP Rules:
+  - RSI > 70 + price at structure resistance = EXIT (overbought)
+  - RSI < 30 + price at structure support = EXIT (oversold)
+  - RSI divergence: price makes higher high but RSI makes lower high
+    = EXIT — momentum fading
+  - MFI > 80 = extreme overbought → tighten TP
+  - ROC declining while price rising = deceleration → tighten TP
+
+Momentum Score (composite):
+  score = 0
+  if RSI > 60: score += 1     (bullish momentum)
+  if RSI < 40: score -= 1     (bearish momentum)
+  if MFI > 70: score += 1     (volume confirms)
+  if MFI < 30: score -= 1
+  if ROC > 0: score += 1      (accelerating)
+  if ROC < 0: score -= 1
+
+  score = +3 → strong bullish → TP extended
+  score = +1 → mild bullish → TP at structure
+  score = 0  → no direction → TP tight (range)
+  score = -1 → mild bearish → TP at structure
+  score = -3 → strong bearish → TP extended
+
+Why it works for any regime:
+  - Momentum exhaustion is universal — every move runs out eventually
+  - In trends: momentum stays strong → ride the move
+  - In ranges: momentum oscillates → take TP at boundaries
+  - In volatile: momentum spikes → take profit fast
+
+
+9. LAYER 7: FIBONACCI / HARMONIC PRICE EXTENSIONS
+================================================================================
+
+Fibonacci ratios are self-fulfilling because millions of traders
+and algorithms use them.
+
+Key levels:
+  Retracement: 0.236, 0.382, 0.500, 0.618, 0.786
+  Extension:   1.272, 1.618, 2.000, 2.618
+
+TP Rules:
+  - Retracement targets (for pullback entries):
+    Entry at 0.618 retrace → TP at 0.0 extension (previous high)
+    Entry at 0.382 retrace → TP at 1.272 extension
+
+  - Extension targets (for trend entries):
+    After a swing: measure A (impulse) to B (pullback)
+    TP1 = B + 0.618 × A
+    TP2 = B + 1.000 × A
+    TP3 = B + 1.618 × A
+
+  - Harmonic pattern targets:
+    Gartley: TP at point D (0.786 retrace)
+    Bat: TP at point D (0.886 retrace)
+    Butterfly: TP at point D (1.272 extension)
+
+XAU/USD note: Gold respects the 1.618 and 2.618 extensions
+extremely well, especially on H4 and D1 timeframes.
+
+Why it works for any regime:
+  - Fibonacci levels are regime-agnostic mathematical ratios
+  - They define WHERE price reacts, not when
+  - Algorithmic trading uses them extensively, making them
+    self-fulfilling at scale
+
+
+10. LAYER 8: NEURAL EXIT LEARNER (ML-BASED ADAPTIVE EXIT)
+================================================================================
+
+Instead of rules, let a neural network learn THE OPTIMAL EXIT
+from historical data.
+
+Architecture:
+  - Input: 15-20 features (momentum, structure, volume, session)
+  - Hidden: 8-12 neurons (small = no overfitting)
+  - Output: optimal exit point (in bars from entry)
+
+Training:
+  1. For every historical trade with a known entry:
+     - Record all indicators at entry time
+     - Record the actual best exit (highest profit before reversal)
+  2. Train the network to predict "bars until optimal exit"
+  3. Retrain weekly to adapt to current conditions
+
+Key insight from research:
+  "Instead of learning WHEN to trade (hardest problem), pin the
+  entry and train a small NN to learn ONLY the exit — the network
+  finds optimal exit within 1 bar of the provably optimal exit
+  on synthetic controls." (The Edge That Wasn't, 2026)
+
+Adaptive learning rate:
+  - When predictions match outcomes → increase learning rate
+  - When errors spike → decrease learning rate (stability)
+  - Retrain on rolling 1000-bar window
+
+Why it works for any regime:
+  - The NN sees patterns humans miss
+  - It adapts by retraining
+  - Small architecture prevents overfitting
+  - It learns regime-specific exits automatically
+
+
+11. THE MASTER ALGORITHM — HOW ALL 8 LAYERS COMBINE
+================================================================================
+
+Step 1: Each layer produces a TP PRICE LEVEL
+Step 2: Each layer produces a CONFIDENCE SCORE (0-1)
+Step 3: Combine using weighted voting
+
+Final TP = Σ(weight_i × TP_level_i × confidence_i) / Σ(weight_i × confidence_i)
+
+In plain English: layers that are more confident about their
+target get more say in the final TP.
+
+Practical simplification:
+  - Find the CONFLUENCE ZONE — price levels where 3+ layers agree
+  - The confluence zone IS the target
+  - More layers agreeing = wider confidence interval
+  - Fewer layers agreeing = tighter, more conservative TP
+
+Confluence Example:
+  Layer 1 (VP):    POC at 2685.50
+  Layer 2 (FVG):   Gap fill target at 2684.80
+  Layer 3 (Liq):   Liquidity zone at 2686.00
+  Layer 4 (Str):   Previous swing high at 2685.20
+  Layer 5 (StdDev): Upper band at 2690.00
+  Layer 6 (Mom):   RSI not yet overbought → no exhaustion
+  Layer 7 (Fib):   1.618 extension at 2686.50
+  Layer 8 (NN):    Predicts exit in 12 bars ≈ 2685.00
+
+  CONFLUENCE: 5 layers within 2684.80 - 2686.50
+  → TP ZONE = 2684.80 - 2686.50 (take profit within this band)
+
+
+12. REGIME WEIGHTING TABLE
+================================================================================
+
+Different layers are more reliable in different regimes:
+
+  | Layer       | Trending | Ranging | Volatile | Low Vol |
+  |-------------|----------|---------|----------|---------|
+  | Volume Prof | ★★★      | ★★★★★   | ★★★      | ★★★★    |
+  | Fair Val Gap| ★★★★     | ★★★     | ★★       | ★★★★    |
+  | Liquidity   | ★★★★★    | ★★★★    | ★★★★★    | ★★★     |
+  | Mkt Struct  | ★★★★★    | ★★★     | ★★★      | ★★★★    |
+  | Std Dev     | ★★★      | ★★★★★   | ★★★★     | ★★★★    |
+  | Momentum    | ★★★★     | ★★★★★   | ★★★      | ★★      |
+  | Fibonacci   | ★★★★★    | ★★★★    | ★★★      | ★★★     |
+  | Neural Net  | ★★★★★    | ★★★★★   | ★★★★     | ★★★★    |
+
+  ★★★★★ = heavily weight this layer
+  ★★★★  = weight this layer normally
+  ★★★   = reduce weight
+  ★★    = minimal weight
+  ★     = ignore this layer
+
+
+13. XAU/USD SPECIFIC TUNING
+================================================================================
+
+A. VOLUME PROFILE
+   - Gold's POC acts as an extremely strong magnet
+   - Build composite VP over 5-day rolling window for intraday
+   - London and NY session VPs are most significant
+   - Asian session VP is often "rediscovered" during London open
+
+B. FAIR VALUE GAPS
+   - Gold creates large FVGs during news events (NFP, CPI, FOMC)
+   - FVGs on H1/H4 are more significant than M5
+   - Gold fills FVGs more reliably than forex pairs (~78% fill rate)
+
+C. LIQUIDITY ZONES
+   - Gold respects round numbers (2600, 2650, 2700) as liquidity
+   - Previous day high/low are STRONG liquidity targets for gold
+   - Gold weekly high/low often define the week's range
+
+D. MOMENTUM
+   - RSI 14 on H1: gold reaches 80+ in strong trends (not just 70)
+   - Use RSI 21 on H4 for trend exhaustion (more reliable)
+   - MFI is particularly effective for gold (volume matters more)
+
+E. FIBONACCI
+   - Gold respects 1.618 extensions very well
+   - On D1, the 2.618 extension of a weekly swing is a major target
+   - Use the Asian session high/low as the "swing" for intraday fibs
+
+F. NEURAL NET
+   - Include gold-specific features:
+     * DXY correlation (inverse, lagging)
+     * VIX level (risk sentiment)
+     * US 10Y yield (opportunity cost of holding gold)
+     * Day of week (gold has day-of-week patterns)
+     * Session (Asian/London/NY)
+
+
+14. PSEUDOCODE
+================================================================================
+
+class DynamicTPEngine:
+    
+    def __init__(self, timeframe, regime):
+        self.timeframe = timeframe
+        self.regime = regime
+        self.regime_weights = self.load_regime_weights()
+    
+    def calculate(self, entry_price, direction, bars, indicators):
+        
+        targets = {}
+        confidences = {}
+        
+        # LAYER 1: Volume Profile
+        poc, vah, val, profile = build_volume_profile(bars)
+        if direction == "BUY":
+            targets["VP"] = poc  # POC is the magnet
+        else:
+            targets["VP"] = poc
+        confidences["VP"] = self.score_vp_confidence(
+            price_distance=abs(entry_price - poc),
+            poc_strength=max(profile.values()) / sum(profile.values())
+        )
+        
+        # LAYER 2: Fair Value Gaps
+        fvg = find_nearest_fvg(bars, direction)
+        if fvg:
+            targets["FVG"] = fvg["target"]
+            confidences["FVG"] = 0.8 if fvg["gap_size"] > 0 else 0.4
+        
+        # LAYER 3: Liquidity Zones
+        liq_zones = find_liquidity_zones(bars, direction)
+        if liq_zones:
+            targets["LIQ"] = liq_zones[0]  # nearest zone
+            confidences["LIQ"] = self.score_liquidity(
+                zone_size=liq_zones[0]["volume_estimate"],
+                direction=direction,
+                vpin=indicators["vpin"]
+            )
+        
+        # LAYER 4: Market Structure
+        structure = analyze_structure(bars)
+        if structure["trend"] != "FLAT":
+            targets["STRUCT"] = structure["projected_high"] \
+                if direction == "BUY" else structure["projected_low"]
+            confidences["STRUCT"] = 0.7 + 0.3 * structure["strength"]
+        
+        # LAYER 5: Standard Deviation
+        sma = SMA(close, 20)
+        std = StdDev(close, 20)
+        if direction == "BUY":
+            targets["STDDEV"] = sma + 2 * std
+        else:
+            targets["STDDEV"] = sma - 2 * std
+        confidences["STDDEV"] = 0.6
+        
+        # LAYER 6: Momentum Exhaustion
+        rsi = RSI(close, 14)
+        mfi = MFI(high, low, close, volume, 14)
+        mom_score = self.momentum_score(rsi, mfi)
+        if abs(mom_score) >= 3:
+            # Strong momentum → extend target
+            targets["MOM"] = entry_price + (direction_factor * std * 3)
+            confidences["MOM"] = 0.9
+        elif abs(mom_score) == 0:
+            # No momentum → tight target
+            targets["MOM"] = sma  # mean reversion
+            confidences["MOM"] = 0.7
+        else:
+            targets["MOM"] = entry_price + (direction_factor * std)
+            confidences["MOM"] = 0.5
+        
+        # LAYER 7: Fibonacci Extensions
+        fib = fibonacci_extensions(bars, direction)
+        if fib:
+            targets["FIB"] = fib["1.618"]
+            confidences["FIB"] = 0.75
+        
+        # LAYER 8: Neural Exit Predictor
+        features = self.build_feature_vector(indicators)
+        nn_exit_bars = self.neural_predictor.predict(features)
+        targets["NN"] = self.project_price_from_bars(
+            entry_price, direction, nn_exit_bars, bars
+        )
+        confidences["NN"] = self.neural_predictor.confidence
+        
+        # COMBINE LAYERS
+        weights = self.regime_weights[self.regime]
+        weighted_sum = 0
+        weight_total = 0
+        
+        for layer, price in targets.items():
+            w = weights.get(layer, 0.5) * confidences[layer]
+            weighted_sum += price * w
+            weight_total += w
+        
+        final_tp = weighted_sum / weight_total
+        
+        # CONFLUENCE CHECK
+        confluence_count = 0
+        tolerance = std * 0.5  # within 0.5 standard deviations
+        for price in targets.values():
+            if abs(price - final_tp) < tolerance:
+                confluence_count += 1
+        
+        # If low confluence, be conservative
+        if confluence_count < 3:
+            # Pull TP closer to entry (safer)
+            final_tp = entry_price + 0.7 * (final_tp - entry_price)
+        
+        # SCALED EXITS (partial profit taking)
+        tp1 = entry_price + 0.5 * (final_tp - entry_price)  # 30% exit
+        tp2 = final_tp                                        # 40% exit
+        tp3 = entry_price + 1.3 * (final_tp - entry_price)  # 30% runner
+        
+        return {
+            "tp1": round(tp1, 2),
+            "tp2": round(tp2, 2),
+            "tp3": round(tp3, 2),
+            "confidence": confluence_count / 8,
+            "layers_agreeing": confluence_count,
+            "individual_targets": targets,
+            "individual_confidences": confidences
+        }
+    
+    def momentum_score(self, rsi, mfi):
+        score = 0
+        if rsi > 60: score += 1
+        elif rsi < 40: score -= 1
+        if mfi > 70: score += 1
+        elif mfi < 30: score -= 1
+        return score
+    
+    def load_regime_weights(self):
+        return {
+            "TRENDING": {
+                "VP": 0.5, "FVG": 0.8, "LIQ": 1.0,
+                "STRUCT": 1.0, "STDDEV": 0.5, "MOM": 0.8,
+                "FIB": 1.0, "NN": 1.0
+            },
+            "RANGING": {
+                "VP": 1.0, "FVG": 0.6, "LIQ": 0.8,
+                "STRUCT": 0.5, "STDDEV": 1.0, "MOM": 1.0,
+                "FIB": 0.8, "NN": 1.0
+            },
+            "VOLATILE": {
+                "VP": 0.5, "FVG": 0.4, "LIQ": 1.0,
+                "STRUCT": 0.5, "STDDEV": 0.8, "MOM": 0.5,
+                "FIB": 0.5, "NN": 0.8
+            },
+            "LOW_VOL": {
+                "VP": 0.8, "FVG": 0.8, "LIQ": 0.5,
+                "STRUCT": 0.8, "STDDEV": 0.8, "MOM": 0.3,
+                "FIB": 0.5, "NN": 0.8
+            }
+        }
+
+
+15. SOURCES
+================================================================================
+
+1. Analytical Volume Profile Trading (AVPT) — MQL5 2026
+   "Visualize the market as a dynamic landscape where price action
+   interacts with volume-based support and resistance zones"
+   https://www.mql5.com/en/articles/20327
+
+2. Fair Value Gap + Volume Profile Confluence — Trader Dale
+   FVGs act as imbalance zones; VP POC acts as magnet
+   https://www.trader-dale.com/
+
+3. Order Flow Analytics PRO — MQL5 2023
+   VPIN, aggressive orders, passive order renewal, momentum
+   https://www.mql5.com/en/blogs/post/754679
+
+4. Market Microstructure in MQL5 Part 6 — Order Flow 2026
+   VPIN, Lee-Ready algorithm, order flow imbalance proxy
+   https://www.mql5.com/en/articles/22939
+
+5. Ampeld Liquidation Heatmap — stop-loss cluster modeling
+   Mathematical retail margin and stop-loss cluster prediction
+   https://ampeld.com/
+
+6. pymarket-structure — Python library for structure analysis
+   +39.85% improvement when using structure-filtered exits
+   https://github.com/fortunato/pymarket-structure
+
+7. The Edge That Wasn't — NN Exit Learner (2026)
+   "Train small 8-unit NN via CMA-ES to learn ONLY the exit"
+   https://theedgethatwasnt.com/
+
+8. MT5 ML Blueprint Part 15 — Optimal PT/SL from synthetic data
+   "Optimal profit target ~51 pips, derived from P&L distribution"
+   https://mql5.com/en/articles/22275
+
+9. Gemini Neural Hive Pro — conviction-based scoring regime
+   "Dynamic Regime Matrix: 10 indicators → unified Neural Score"
+   https://www.mql5.com/en/market/product/167680
+
+10. Adaptive Markov-based EA with Neural Interpretation 2026
+    "Markov transitions + NN to recognize regimes, retrain regularly"
+    https://investing.plus/
+
+11. Take Profit Strategies Forex — Market Trader Daily 2026
+    "Firms employing volatility-adjusted TP realized 14.7x higher
+    gains than static models"
+    https://markettraderdaily.com/blog/2026/08/take-profit-strategies-forex
+
+12. Volume Profile Trading — Quantum Algo 2026
+    "POC acts as magnet; HVNs decelerate price; LVNs accelerate it"
+    https://www.quantum-algo.com/blog/volume-profile-trading-strategy-guide/
+
+13. Gold Specific — SMC structure, round number respect, session
+    behavior documented across multiple institutional sources
+
+================================================================================
+  END OF DOCUMENT
+================================================================================
